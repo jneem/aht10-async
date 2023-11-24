@@ -1,6 +1,6 @@
 //! A platform agnostic driver to interface with the AHT10 temperature and humidity sensor.
 //!
-//! This driver was built using [`embedded-hal`] traits.
+//! This driver was built using [`embedded-hal-async`] traits.
 //!
 //! Unfortunately, the AHT10 datasheet is somewhat underspecified. There's a
 //! FIFO mode as well as command data bytes which are briefly mentioned, but
@@ -11,15 +11,11 @@
 #![deny(missing_docs)]
 #![no_std]
 
-extern crate embedded_hal as hal;
-
-use hal::blocking::delay::DelayMs;
-use hal::blocking::i2c::{Write, WriteRead};
+use embedded_hal_async::delay::DelayUs;
+use embedded_hal_async::i2c::I2c;
 
 const I2C_ADDRESS: u8 = 0x38;
 
-#[allow(dead_code)]
-#[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 #[repr(u8)]
 enum Command {
@@ -95,43 +91,43 @@ impl Temperature {
     }
 }
 
-impl<I2C, D, E> AHT10<I2C, D>
+impl<I2C, D> AHT10<I2C, D>
 where
-    I2C: WriteRead<Error = E> + Write<Error = E>,
-    D: DelayMs<u16>,
+    I2C: I2c,
+    D: DelayUs,
 {
     /// Creates a new AHT10 device from an I2C peripheral.
-    pub fn new(i2c: I2C, delay: D) -> Result<Self, E> {
+    pub async fn new(i2c: I2C, delay: D) -> Result<Self, I2C::Error> {
         let mut dev = AHT10 {
             i2c: i2c,
             delay: delay,
         };
-        dev.write_cmd(Command::GetRaw, 0)?;
-        dev.delay.delay_ms(300);
+        dev.write_cmd(Command::GetRaw, 0).await?;
+        dev.delay.delay_ms(300).await;
         // MSB notes:
         // Bit 2 set => temperature is roughly doubled(?)
         // Bit 3 set => calibrated flag
         // Bit 4 => temperature is negative? (cyc mode?)
-        dev.write_cmd(Command::Calibrate, 0x0800)?;
-        dev.delay.delay_ms(300);
+        dev.write_cmd(Command::Calibrate, 0x0800).await?;
+        dev.delay.delay_ms(300).await;
         Ok(dev)
     }
 
     /// Soft reset the sensor.
-    pub fn reset(&mut self) -> Result<(), E> {
-        self.write_cmd(Command::Reset, 0)?;
-        self.delay.delay_ms(20);
+    pub async fn reset(&mut self) -> Result<(), I2C::Error> {
+        self.write_cmd(Command::Reset, 0).await?;
+        self.delay.delay_ms(20).await;
         Ok(())
     }
 
     /// Read humidity and temperature.
-    pub fn read(&mut self) -> Result<(Humidity, Temperature), Error<E>> {
+    pub async fn read(&mut self) -> Result<(Humidity, Temperature), Error<I2C::Error>> {
         let buf: &mut [u8; 7] = &mut [0; 7];
         // Sort of reverse engineered the cmd data:
         // Bit 0 -> temperature calibration (0 => +0.5C)
         // Bit {1,2,3} -> refresh rate? (0 => slow refresh)
         self.i2c
-            .write_read(I2C_ADDRESS, &[Command::GetCT as u8, 0b11111111, 0], buf)?;
+            .write_read(I2C_ADDRESS, &[Command::GetCT as u8, 0b11111111, 0], buf).await?;
         let status = StatusFlags { bits: buf[0] };
         if !status.contains(StatusFlags::CALIBRATION_ENABLE) {
             return Err(Error::Uncalibrated());
@@ -141,10 +137,10 @@ where
         Ok((Humidity { h: hum }, Temperature { t: temp }))
     }
 
-    fn write_cmd(&mut self, cmd: Command, dat: u16) -> Result<(), E> {
+    async fn write_cmd(&mut self, cmd: Command, dat: u16) -> Result<(), I2C::Error> {
         self.i2c.write(
             I2C_ADDRESS,
             &[cmd as u8, (dat >> 8) as u8, (dat & 0xff) as u8],
-        )
+        ).await
     }
 }
