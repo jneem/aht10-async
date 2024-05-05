@@ -11,7 +11,7 @@
 #![deny(missing_docs)]
 #![no_std]
 
-use embedded_hal_async::delay::DelayUs;
+use embedded_hal_async::delay::DelayNs;
 use embedded_hal_async::i2c::I2c;
 
 const I2C_ADDRESS: u8 = 0x38;
@@ -94,14 +94,11 @@ impl Temperature {
 impl<I2C, D> AHT10<I2C, D>
 where
     I2C: I2c,
-    D: DelayUs,
+    D: DelayNs,
 {
     /// Creates a new AHT10 device from an I2C peripheral.
     pub async fn new(i2c: I2C, delay: D) -> Result<Self, I2C::Error> {
-        let mut dev = AHT10 {
-            i2c: i2c,
-            delay: delay,
-        };
+        let mut dev = AHT10 { i2c, delay };
         dev.write_cmd(Command::GetRaw, 0).await?;
         dev.delay.delay_ms(300).await;
         // MSB notes:
@@ -127,7 +124,8 @@ where
         // Bit 0 -> temperature calibration (0 => +0.5C)
         // Bit {1,2,3} -> refresh rate? (0 => slow refresh)
         self.i2c
-            .write_read(I2C_ADDRESS, &[Command::GetCT as u8, 0b11111111, 0], buf).await?;
+            .write_read(I2C_ADDRESS, &[Command::GetCT as u8, 0b11111111, 0], buf)
+            .await?;
         let status = StatusFlags { bits: buf[0] };
         if !status.contains(StatusFlags::CALIBRATION_ENABLE) {
             return Err(Error::Uncalibrated());
@@ -138,9 +136,11 @@ where
     }
 
     async fn write_cmd(&mut self, cmd: Command, dat: u16) -> Result<(), I2C::Error> {
-        self.i2c.write(
-            I2C_ADDRESS,
-            &[cmd as u8, (dat >> 8) as u8, (dat & 0xff) as u8],
-        ).await
+        self.i2c
+            .write(
+                I2C_ADDRESS,
+                &[cmd as u8, (dat >> 8) as u8, (dat & 0xff) as u8],
+            )
+            .await
     }
 }
